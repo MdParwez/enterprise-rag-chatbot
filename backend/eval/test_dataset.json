@@ -1,0 +1,10 @@
+[
+  {
+    "question": "What is this knowledge base about?",
+    "ground_truth": "Replace this with the expected answer based on your ingested documents."
+  },
+  {
+    "question": "Summarize the key points of the uploaded documents.",
+    "ground_truth": "Replace this with the expected answer based on your ingested documents."
+  }
+]
