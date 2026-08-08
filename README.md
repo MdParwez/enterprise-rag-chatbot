@@ -1,188 +1,266 @@
 # Enterprise RAG Chatbot
 
-A production-shaped Retrieval-Augmented Generation chatbot: **FastAPI** backend,
-**React (Vite)** frontend, **ChromaDB** vector store, **Groq** for free/fast LLM
-inference, and **RAGAS** for automated quality evaluation.
+> A production-shaped knowledge assistant that turns your documents into a searchable, cited, voice-enabled workspace.
+
+![Enterprise RAG Chatbot](screenshots/chat.png)
+
+**Enterprise RAG Chatbot** combines semantic search, BM25 lexical search, Reciprocal Rank Fusion, Groq generation, local Whisper transcription, and RAGAS evaluation in one full-stack application.
+
+It is designed for teams that need answers grounded in their own PDFs, DOCX files, Markdown, text, or CSV data instead of answers based only on a model's general memory.
+
+## Screenshots
+
+Add project screenshots to `screenshots/` using these names:
+
+| Chat workspace | Document library |
+| --- | --- |
+| ![Chat workspace](screenshots/chat.png) | ![Document library](screenshots/documents.png) |
+
+| Evaluation dashboard | Voice input and sources |
+| --- | --- |
+| ![Evaluation dashboard](screenshots/evaluation.png) | ![Voice and sources](screenshots/voice-and-sources.png) |
+
+## Highlights
+
+- **Grounded answers**: the LLM receives retrieved document context, not an empty prompt.
+- **True hybrid retrieval**: ChromaDB vector ranking plus BM25 lexical ranking merged with Reciprocal Rank Fusion.
+- **Semantic chunking**: adjacent sentences are grouped by embedding similarity so topic boundaries remain coherent.
+- **Citations and evidence**: answers expose source filename, page, score, citation, and excerpt.
+- **Streaming responses**: sources arrive first, then answer tokens stream over Server-Sent Events.
+- **Local voice transcription**: `faster-whisper` runs locally for free; browser SpeechRecognition is the fallback.
+- **Async ingestion**: larger uploads run as background jobs with progress tracking.
+- **RAGAS evaluation**: faithfulness, answer relevancy, context precision, and context recall.
+- **Operational visibility**: health checks, cache metrics, latency metrics, evaluation history, and startup scripts.
 
 ## Architecture
 
-```
-┌─────────────┐      REST/SSE       ┌──────────────────────┐
-│   React UI  │ ──────────────────► │      FastAPI          │
-│  (Vite)     │ ◄────────────────── │                        │
-└─────────────┘                     │  ┌──────────────────┐  │
-                                     │  │  RAG Pipeline     │  │
-                                     │  │  - embed query    │  │
-                                     │  │  - retrieve       │  │
-                                     │  │  - build context  │  │
-                                     │  │  - generate       │  │
-                                     │  └──────────────────┘  │
-                                     │        │      │        │
-                              ┌──────┴───┐ ┌──┴───┐ ┌┴─────┐  │
-                              │ ChromaDB │ │ Groq │ │Cache │  │
-                              │ (vectors)│ │ (LLM)│ │(TTL) │  │
-                              └──────────┘ └──────┘ └──────┘  │
-                                     │                        │
-                                     │  ┌──────────────────┐  │
-                                     └─►│  RAGAS Evaluator  │  │
-                                        │  (faithfulness,   │  │
-                                        │  relevancy, etc.) │  │
-                                        └──────────────────┘  │
-                                     └──────────────────────┘
+```mermaid
+flowchart LR
+    UI[React + Vite UI] -->|REST / SSE| API[FastAPI API]
+    API --> ING[Document ingestion]
+    ING --> EX[PDF / DOCX / TXT / MD / CSV extraction]
+    EX --> CH[Semantic chunking]
+    CH --> EMB[Sentence Transformer embeddings]
+    EMB --> DB[(ChromaDB)]
+    API --> RET[Hybrid retrieval]
+    RET --> DB
+    RET --> BM[BM25 lexical index]
+    RET --> RRF[Reciprocal Rank Fusion]
+    RRF --> LLM[Groq LLM]
+    API --> WH[Local faster-whisper]
+    API --> EVA[RAGAS evaluator]
 ```
 
-## Folder structure
+## Request Lifecycle
 
+### Document ingestion
+
+```text
+Upload file -> validate -> extract text -> semantic chunks -> embeddings -> ChromaDB
 ```
+
+PDF pages preserve page numbers. DOCX paragraphs and tables are extracted. Text files support common encodings. Scanned PDFs can use optional OCR.
+
+### Question answering
+
+```text
+Question
+  -> embedding search in ChromaDB
+  -> BM25 lexical search
+  -> Reciprocal Rank Fusion
+  -> similarity filtering
+  -> diversity reranking
+  -> grounded Groq prompt
+  -> SSE answer stream with citations
+```
+
+### Voice input
+
+```text
+MediaRecorder -> local faster-whisper -> transcript in composer
+                              \-> browser SpeechRecognition fallback
+```
+
+## Technology Stack
+
+| Layer | Technology | Purpose |
+| --- | --- | --- |
+| UI | React, Vite, Redux Toolkit | Workspace and application state |
+| API | FastAPI, Uvicorn, Pydantic | Typed HTTP and SSE endpoints |
+| Semantic search | Sentence Transformers | Query and document embeddings |
+| Lexical search | rank-bm25 | Exact-term retrieval |
+| Vector store | ChromaDB | Persistent local vector storage |
+| Generation | Groq LLM | Grounded answer generation |
+| Voice | faster-whisper | Free local speech-to-text |
+| Evaluation | RAGAS | Retrieval and answer quality metrics |
+| Processing | PyPDF, python-docx | Document extraction |
+
+## Project Layout
+
+```text
 enterprise-rag-chatbot/
-├── docker-compose.yml
 ├── backend/
-│   ├── requirements.txt
-│   ├── Dockerfile
-│   ├── .env.example
 │   ├── app/
-│   │   ├── main.py                 # FastAPI app + router wiring
-│   │   ├── core/
-│   │   │   ├── config.py           # Pydantic settings (env-driven)
-│   │   │   └── logging_config.py   # Structured loguru logging
-│   │   ├── models/
-│   │   │   └── schemas.py          # Request/response contracts
-│   │   ├── services/
-│   │   │   ├── embeddings.py       # Local sentence-transformers embedder
-│   │   │   ├── chunking.py         # Recursive text splitter
-│   │   │   ├── vectorstore.py      # ChromaDB wrapper
-│   │   │   ├── llm.py              # Groq client (sync + streaming)
-│   │   │   ├── cache.py            # TTL/LRU query cache
-│   │   │   ├── ingestion.py        # PDF/DOCX/TXT -> chunks -> Chroma
-│   │   │   ├── rag_pipeline.py     # Retrieval + generation orchestration
-│   │   │   └── evaluation.py       # RAGAS evaluation harness
-│   │   └── api/routes/
-│   │       ├── health.py
-│   │       ├── chat.py             # POST /api/chat, /api/chat/stream
-│   │       ├── documents.py        # upload/list/delete documents
-│   │       └── evaluation.py       # POST /api/evaluate
-│   └── eval/
-│       ├── test_dataset.json       # sample eval questions
-│       └── run_evaluation.py       # CLI RAGAS runner
-└── frontend/
-    ├── package.json / vite.config.js / Dockerfile
-    └── src/
-        ├── App.jsx, main.jsx, styles.css
-        ├── api/client.js           # axios + spec-compliant SSE parser
-        ├── store/
-        │   ├── index.js            # Redux store config
-        │   ├── chatSlice.js        # messages/session state + SSE-driving thunk
-        │   ├── documentsSlice.js   # ingestion state + async thunks
-        │   └── evaluationSlice.js  # RAGAS run state + async thunk
-        ├── utils/
-        │   └── speech.js           # native Web Speech API TTS wrapper
-        └── components/
-            ├── Sidebar.jsx
-            ├── ChatWindow.jsx      # streaming chat UI + mic input + auto-read toggle
-            ├── MessageBubble.jsx / SourceCard.jsx  # manual speak / pause-resume / stop controls
-            ├── DocumentUpload.jsx  # drag-drop ingestion + doc list
-            └── EvaluationDashboard.jsx
+│   │   ├── api/routes/       # chat, documents, evaluation, health, transcription
+│   │   ├── core/             # settings and logging
+│   │   ├── models/           # Pydantic API contracts
+│   │   └── services/         # ingestion, retrieval, embeddings, LLM, cache, jobs
+│   ├── eval/                 # evaluation dataset and history
+│   ├── requirements.txt
+│   └── .env.example
+├── frontend/
+│   ├── src/components/       # chat, sources, documents, evaluation, sidebar
+│   ├── src/store/            # Redux slices
+│   ├── src/api/              # REST and SSE clients
+│   └── package.json
+├── screenshots/              # add GitHub README screenshots here
+├── start.ps1
+├── stop.ps1
+└── docker-compose.yml
 ```
 
-## Voice input & voice output
+## Quick Start: Windows
 
-- **Speech-to-text (query input)**: the mic button next to the composer uses
-  the [`react-speech-recognition`](https://www.npmjs.com/package/react-speech-recognition)
-  library, which wraps the browser's native `SpeechRecognition` API. Tap the
-  mic, speak your question, tap again (or it keeps listening continuously)
-  — the live transcript fills the input box, ready to edit or send.
-- **Text-to-speech (responses)**: each assistant reply gets a 🔊 **Speak**
-  button, entirely manual — nothing is read aloud automatically. Once
-  playing, it's replaced by a **⏸ Pause / ▶ Resume** toggle plus a **⏹ Stop**
-  button, backed by the browser's native `speechSynthesis` API
-  (`src/utils/speech.js`, using `pause()`/`resume()`/`cancel()`).
-- **Browser support**: both are built on the Web Speech API family, which is
-  best supported in Chrome/Edge; Firefox and Safari have partial or no
-  `SpeechRecognition` support (the mic button and hint text are
-  auto-hidden/shown based on `browserSupportsSpeechRecognition`). Microphone
-  access requires HTTPS in production (localhost is exempt during dev).
+### Prerequisites
 
-## Why these choices (and the optimizations built in)
+- Python 3.11+
+- Node.js 20+
+- A Groq API key for answer generation and RAGAS judging
+- Windows microphone permission for voice input
 
-- **Groq** for the LLM: free API tier, very low-latency inference over open
-  models (default `llama-3.3-70b-versatile`). Swap `GROQ_MODEL` freely.
-- **Local embeddings** (`sentence-transformers/all-MiniLM-L6-v2`): no API
-  cost or rate limit for embedding, runs on CPU, loaded once as a singleton.
-- **ChromaDB**: embedded/persistent vector store, no external service to run.
-- **Recursive chunking with overlap**: preserves context across chunk
-  boundaries — a major RAG quality lever.
-- **Similarity threshold filtering**: low-relevance chunks are dropped before
-  they reach the LLM, reducing hallucination and token spend.
-- **TTL/LRU query cache**: repeated or duplicate questions skip both
-  retrieval and generation entirely.
-- **Streaming responses (SSE)**: tokens render as they arrive from Groq for
-  a responsive UI, sources are sent first so citations show immediately.
-- **RAGAS evaluation**: faithfulness, answer relevancy, context precision,
-  and context recall — computed with Groq as the judge LLM, so evaluation
-  stays free of paid API dependencies too.
+### Install backend
 
-## Setup
-
-### 1. Backend
-
-```bash
+```powershell
 cd backend
-python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-cp .env.example .env
-# Edit .env and set GROQ_API_KEY (get a free key at https://console.groq.com/keys)
-uvicorn app.main:app --reload --port 8000
+python -m venv venv
+.\venv\Scripts\python.exe -m pip install -r requirements.txt
+Copy-Item .env.example .env
 ```
 
-### 2. Frontend
+Edit `backend/.env` and set:
 
-```bash
+```env
+GROQ_API_KEY=your_key_here
+```
+
+### Install frontend
+
+```powershell
 cd frontend
 npm install
-npm run dev
 ```
 
-Visit `http://localhost:5173`. Vite proxies `/api` and `/health` to the
-backend on port 8000 (see `vite.config.js`).
+### Start everything
 
-### 3. Docker (both services + persistent volume)
+From the repository root:
 
-```bash
-cp backend/.env.example backend/.env   # set GROQ_API_KEY first
-docker compose up --build
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start.ps1
 ```
 
-Frontend: `http://localhost:4173` · Backend: `http://localhost:8000`
+Open:
 
-## Using it
+- Frontend: `http://localhost:5173`
+- Backend: `http://localhost:8000`
+- Health: `http://localhost:8000/health`
 
-1. Open the **Documents** tab, drag in a PDF/DOCX/TXT/MD file. It's chunked,
-   embedded locally, and stored in ChromaDB.
-2. Open **Chat** and ask a question. The assistant retrieves relevant
-   chunks, streams a grounded answer, and shows a "retrieval trace" of the
-   sources it used with similarity scores.
-3. Open **Evaluation**, click **Run Evaluation** to score the pipeline
-   against `backend/eval/test_dataset.json` with RAGAS. Edit that file (or
-   POST your own `items` to `/api/evaluate`) with real questions and
-   `ground_truth` answers drawn from your ingested documents for meaningful
-   scores.
+If port `8000` is unavailable, the launcher automatically uses `8001` and configures the Vite proxy to match.
 
-## API reference
+### Stop everything
 
-| Method | Path                    | Purpose                              |
-|--------|-------------------------|---------------------------------------|
-| GET    | `/health`               | Service + index health check          |
-| POST   | `/api/chat`              | Ask a question (non-streaming)        |
-| POST   | `/api/chat/stream`       | Ask a question (SSE token stream)     |
-| POST   | `/api/documents/upload`  | Upload & ingest one or more files     |
-| GET    | `/api/documents`         | List ingested sources + chunk counts  |
-| DELETE | `/api/documents/{name}`  | Remove a source and its chunks        |
-| POST   | `/api/evaluate`          | Run RAGAS evaluation                  |
+```powershell
+powershell -ExecutionPolicy Bypass -File .\stop.ps1
+```
 
-## Extending toward production
+Preview without stopping processes:
 
-- Swap the TTL cache for Redis if running multiple backend replicas.
-- Add hybrid search (BM25 + vector) in `vectorstore.py` for keyword-sensitive queries.
-- Add a reranker (e.g. a cross-encoder) between retrieval and prompt-building for higher precision.
-- Add auth (API key / OAuth) and per-tenant Chroma collections for multi-tenant isolation.
-- Wire `logs/app.log` and RAGAS scores into an observability stack (e.g. Prometheus/Grafana) for regression tracking over time.
+```powershell
+powershell -ExecutionPolicy Bypass -File .\stop.ps1 -WhatIf
+```
+
+## Configuration
+
+Important settings in `backend/.env`:
+
+```env
+GROQ_MODEL=llama-3.3-70b-versatile
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+VOICE_MODEL_SIZE=base
+VOICE_DEVICE=cpu
+CHUNK_SIZE=800
+CHUNK_OVERLAP=120
+SEMANTIC_CHUNKING=true
+SEMANTIC_SIMILARITY_THRESHOLD=0.55
+HYBRID_VECTOR_WEIGHT=0.7
+RRF_K=60
+TOP_K=6
+SIMILARITY_THRESHOLD=0.25
+DIVERSITY_THRESHOLD=0.85
+```
+
+The first use of the embedding and faster-whisper models may download model files locally.
+
+### Optional OCR
+
+Set `OCR_ENABLED=true` and install `pdf2image`, `pytesseract`, plus the Tesseract system application to process scanned PDFs.
+
+## API Reference
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| GET | `/health` | Full service status and metrics |
+| GET | `/health/live` | Lightweight liveness check |
+| GET | `/health/ready` | Dependency readiness check |
+| POST | `/api/chat` | Non-streaming grounded answer |
+| POST | `/api/chat/stream` | SSE sources and token stream |
+| POST | `/api/documents/upload` | Synchronous document ingestion |
+| POST | `/api/documents/upload/async` | Background document ingestion |
+| GET | `/api/documents/jobs/{job_id}` | Ingestion progress |
+| GET | `/api/documents` | Indexed source list |
+| DELETE | `/api/documents/{source_name}` | Delete a source |
+| POST | `/api/transcribe` | Local Whisper transcription |
+| POST | `/api/evaluate` | Run RAGAS evaluation |
+| GET | `/api/evaluate/history` | Recent evaluation runs |
+
+## Evaluation
+
+Edit `backend/eval/test_dataset.json` with real questions and expected answers from your documents. Then use the Evaluation tab or:
+
+```powershell
+cd backend
+.\venv\Scripts\python.exe eval\run_evaluation.py
+```
+
+The dashboard reports faithfulness, answer relevancy, context precision, context recall, per-question results, and recent run history.
+
+## Testing and Validation
+
+```powershell
+cd backend
+.\venv\Scripts\python.exe -m compileall app tests
+.\venv\Scripts\python.exe -m unittest tests.test_chunking tests.test_cache tests.test_api_contracts -v
+
+cd ..\frontend
+npm run build
+```
+
+## Security Notes
+
+- Never commit `.env` or API keys.
+- Rotate any API key that has been shared publicly.
+- Local evaluation history, Chroma data, logs, virtual environments, and build output are intentionally ignored.
+- Add authentication and tenant isolation before deploying for multiple organizations.
+
+## Roadmap
+
+- Authentication and role-based access
+- Tenant-isolated Chroma collections
+- Redis-backed job and cache storage
+- Cross-encoder reranking
+- OCR packaging for production deployments
+- OpenTelemetry and Prometheus dashboards
+- Document preview with highlighted citations
+
+## License
+
+Add the license that matches your intended distribution before publishing this repository.
